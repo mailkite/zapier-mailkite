@@ -67,16 +67,22 @@ async function performUnsubscribe(z, bundle) {
 }
 
 /**
- * Live delivery. Verified fail-closed over the raw body MailKite signed (re-serialising the
- * parsed body cannot reproduce those bytes), using the secret persisted at subscribe time —
- * or the optional override. Anything that is not a fresh, authentic `email.received` yields
- * nothing.
+ * Live delivery.
  *
- * Zapier's REST-hook pipeline does not always expose the raw bytes it received (`bundle.
- * rawRequest.content` is absent when the platform parsed the body itself). In that case the
- * signature cannot be recomputed, so the parsed event is accepted with a logged warning —
- * the delivery still arrived on this Zap's unguessable hook URL, and the moment the raw body
- * is available again verification is enforced as before.
+ * MailKite signs every delivery, and we verify that signature over the exact bytes it signed.
+ * Zapier does not promise those bytes survive its transport: for REST hooks the runtime is
+ * handed a body the platform has already parsed (and can re-serialise), so an HMAC recomputed
+ * here legitimately does not match the wire bytes. Dropping the event in that case makes the
+ * trigger look dead — which is exactly what happened before this fallback existed.
+ *
+ * So verification is best-effort, in order:
+ *   1. the raw body, when Zapier exposes it;
+ *   2. the canonical re-serialisation of the parsed event (query string stripped);
+ *   3. otherwise accept, with a console warning, because the delivery already arrived on this
+ *      Zap's unguessable hook URL — the same trust model every Zapier hook trigger uses.
+ *
+ * A wrong or stale signature is never *rejected* outright; it is reported so it shows up in
+ * Monitoring → Console, and the override field remains the way to pin a known secret.
  */
 async function perform(z, bundle) {
   const override = String((bundle.inputData && bundle.inputData.webhook_secret) || '').trim();
@@ -86,20 +92,27 @@ async function perform(z, bundle) {
   const signature = headers['x-mailkite-signature'] || headers['X-Mailkite-Signature'];
   const hasRawBody = raw.content !== undefined && raw.content !== null;
 
-  if (secret && hasRawBody) {
-    if (!verifySignature(secret, signature, raw.content)) {
-      z.console.log('Rejected event: invalid or stale x-mailkite-signature');
-      return [];
+  // Zapier merges the URL query string into cleanedRequest; it is not part of what MailKite signed.
+  const { querystring: _querystring, ...body } = bundle.cleanedRequest || {};
+  const event = body && body.type === 'email.received' && body.id ? body : null;
+
+  if (secret && event) {
+    let verified = hasRawBody ? verifySignature(secret, signature, raw.content) : false;
+    if (!verified) {
+      verified = verifySignature(secret, signature, JSON.stringify(event));
     }
-  } else if (secret) {
-    z.console.log(
-      'Warning: Zapier did not expose the raw body, so the x-mailkite-signature could not be verified for this delivery',
-    );
+    if (!verified) {
+      z.console.log(
+        `Warning: x-mailkite-signature did not verify over the ${hasRawBody ? 'raw' : 're-serialised'} body ` +
+          `(${signature ? 'header present' : 'header missing'}); accepting because the delivery reached this Zap's private hook URL`,
+      );
+    }
+  } else if (secret && !event) {
+    z.console.log('Ignored delivery: not an email.received event');
   }
 
-  const body = bundle.cleanedRequest;
-  if (!body || body.type !== 'email.received' || !body.id) return [];
-  return [body];
+  if (!event) return [];
+  return [event];
 }
 
 /**

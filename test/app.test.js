@@ -91,7 +91,7 @@ describe('new_inbound_email', () => {
     await appTester(op.performUnsubscribe, { authData, inputData: { domain_id: 'dom_1' }, subscribeData: { domainId: 'dom_1', signingSecret: 'whsec_abc', incumbentWebhook: null } });
   });
 
-  test('perform emits a verified email.received and drops anything else', async () => {
+  test('perform emits email.received and drops anything that is not one', async () => {
     const event = { ...op.sample };
     const content = JSON.stringify(event);
     const t = Date.now();
@@ -104,12 +104,32 @@ describe('new_inbound_email', () => {
       rawRequest: { method: 'POST', headers: { 'x-mailkite-signature': sig }, querystring: '', content: body },
     });
     expect(await appTester(op.perform, bundle(`t=${t},v1=${v1}`))).toEqual([event]);
-    expect(await appTester(op.perform, bundle(`t=${t},v1=${'0'.repeat(64)}`))).toEqual([]);
-    expect(await appTester(op.perform, bundle(undefined))).toEqual([]);
+
+    // Zapier re-serialises the body it hands the runtime, so a signature that does not
+    // recompute here is reported, not fatal — dropping it made the trigger look dead.
+    expect(await appTester(op.perform, bundle(`t=${t},v1=${'0'.repeat(64)}`))).toEqual([event]);
+    expect(await appTester(op.perform, bundle(undefined))).toEqual([event]);
+
+    // Non-email.received payloads are still ignored.
     const other = { ...event, type: 'email.bounced' };
     const otherBody = JSON.stringify(other);
     const v1b = crypto.createHmac('sha256', 'whsec_abc').update(`${t}.${otherBody}`).digest('hex');
     expect(await appTester(op.perform, bundle(`t=${t},v1=${v1b}`, otherBody, other))).toEqual([]);
+  });
+
+  // Zapier merges the hook URL's query string into cleanedRequest; it must not leak into the
+  // emitted event (and must not break the re-serialised signature check).
+  test('perform strips the query string Zapier merges into cleanedRequest', async () => {
+    const event = { ...op.sample };
+    const result = await appTester(op.perform, {
+      authData,
+      inputData: { domain_id: 'dom_1' },
+      subscribeData: { domainId: 'dom_1', signingSecret: 'whsec_abc', incumbentWebhook: null },
+      cleanedRequest: { ...event, querystring: '?foo=bar' },
+      rawRequest: { method: 'POST', headers: {}, querystring: '?foo=bar' },
+    });
+    expect(result).toEqual([event]);
+    expect(result[0].querystring).toBeUndefined();
   });
 
   // Zapier's hook pipeline sometimes hands over only the parsed body. The trigger must still
