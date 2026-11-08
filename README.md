@@ -1,6 +1,6 @@
 # zapier-mailkite
 
-Zapier integration for [MailKite](https://mailkite.dev) — send email from a verified
+Zapier integration for [MailKite](https://mailkite.dev/?utm_source=zapier&utm_medium=integration&utm_campaign=app) — send email from a verified
 domain with one step, and start Zaps when email arrives at your domain.
 
 Built with the [Zapier Platform CLI](https://github.com/zapier/zapier-platform).
