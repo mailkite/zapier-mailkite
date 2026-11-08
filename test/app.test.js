@@ -112,6 +112,21 @@ describe('new_inbound_email', () => {
     expect(await appTester(op.perform, bundle(`t=${t},v1=${v1b}`, otherBody, other))).toEqual([]);
   });
 
+  // Zapier's hook pipeline sometimes hands over only the parsed body. The trigger must still
+  // emit the event (it cannot recompute the HMAC without the raw bytes), otherwise every live
+  // delivery is silently dropped.
+  test('perform accepts the parsed event when Zapier omits the raw body', async () => {
+    const event = { ...op.sample };
+    const result = await appTester(op.perform, {
+      authData,
+      inputData: { domain_id: 'dom_1' },
+      subscribeData: { domainId: 'dom_1', signingSecret: 'whsec_abc', incumbentWebhook: null },
+      cleanedRequest: event,
+      rawRequest: { method: 'POST', headers: {}, querystring: '' },
+    });
+    expect(result).toEqual([event]);
+  });
+
   test('performList maps inbound rows for the chosen domain into events', async () => {
     nock(BASE).get('/api/domains/dom_1').reply(200, { domain: DOMAIN, dns: [] });
     nock(BASE)

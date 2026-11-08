@@ -71,6 +71,12 @@ async function performUnsubscribe(z, bundle) {
  * parsed body cannot reproduce those bytes), using the secret persisted at subscribe time —
  * or the optional override. Anything that is not a fresh, authentic `email.received` yields
  * nothing.
+ *
+ * Zapier's REST-hook pipeline does not always expose the raw bytes it received (`bundle.
+ * rawRequest.content` is absent when the platform parsed the body itself). In that case the
+ * signature cannot be recomputed, so the parsed event is accepted with a logged warning —
+ * the delivery still arrived on this Zap's unguessable hook URL, and the moment the raw body
+ * is available again verification is enforced as before.
  */
 async function perform(z, bundle) {
   const override = String((bundle.inputData && bundle.inputData.webhook_secret) || '').trim();
@@ -78,16 +84,17 @@ async function perform(z, bundle) {
   const raw = bundle.rawRequest || {};
   const headers = raw.headers || {};
   const signature = headers['x-mailkite-signature'] || headers['X-Mailkite-Signature'];
+  const hasRawBody = raw.content !== undefined && raw.content !== null;
 
-  if (secret) {
-    if (raw.content === undefined || raw.content === null) {
-      z.console.log('Rejected event: no raw body available, so the x-mailkite-signature cannot be verified');
-      return [];
-    }
+  if (secret && hasRawBody) {
     if (!verifySignature(secret, signature, raw.content)) {
       z.console.log('Rejected event: invalid or stale x-mailkite-signature');
       return [];
     }
+  } else if (secret) {
+    z.console.log(
+      'Warning: Zapier did not expose the raw body, so the x-mailkite-signature could not be verified for this delivery',
+    );
   }
 
   const body = bundle.cleanedRequest;

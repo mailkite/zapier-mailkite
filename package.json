@@ -1,6 +1,6 @@
 {
   "name": "zapier-mailkite",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Zapier integration for MailKite — send email from a verified domain, and start Zaps when email arrives.",
   "main": "index.js",
   "license": "MIT",
